@@ -14,9 +14,14 @@ A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a c
 https://api-liturgia-diaria.vercel.app/
 
 ## Parametros
-https://api-liturgia-diaria.vercel.app/?date=2024-10-28
+https://api-liturgia-diaria.vercel.app/?date=2024-11-25
+
+## URL Canção Nova
+https://api-liturgia-diaria.vercel.app/cn
 
 ## Fonte
-- https://sagradaliturgia.com.br/
-- Canção Nova
+1. https://sagradaliturgia.com.br/
+2. Canção Nova
+
+*Caso a fonte 1 falhe, consulte a fonte 2
 
