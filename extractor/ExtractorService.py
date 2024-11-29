@@ -3,7 +3,7 @@
 import locale
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+import datetime
 
 from .Utils import Utils
 
@@ -11,7 +11,7 @@ from .Utils import Utils
 class ExtractorService():
     
     def getScrapySagradaLiturgia(date):
-        if date == "":
+        if date == None:
             today = datetime.date.today()
             date = today.strftime('%Y-%m-%d')
         
@@ -35,7 +35,7 @@ class ExtractorService():
 
         data_texto_c = header.find('b')
         data_texto = data_texto_c.text.lower().split(', ')[1]
-        data_formatada = datetime.strptime(data_texto, '%d de %B de %Y')
+        data_formatada = datetime.datetime.strptime(data_texto, '%d de %B de %Y')
 
         data["date"] = data_formatada.strftime("%d/%m/%Y")
         data["date_string"] = {
