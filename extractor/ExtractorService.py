@@ -47,7 +47,7 @@ class ExtractorService():
         img_color.decompose()
         data_texto_c.decompose()
 
-        data["entry_title"] = header.get_text(strip=True)
+        data["entry_title"] = str(header).replace("<br/><br/>", "").replace("<center>", "").replace("</center>", "")
 
         header.decompose()
 
