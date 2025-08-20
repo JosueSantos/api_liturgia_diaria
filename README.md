@@ -25,3 +25,5 @@ https://api-liturgia-diaria.vercel.app/cn
 
 *Caso a fonte 1 falhe, consulte a fonte 2
 
+### Plugin Wordpress
+https://github.com/JosueSantos/wp-liturgia-diaria-plugin
