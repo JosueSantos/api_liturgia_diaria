@@ -9,6 +9,47 @@ from .Utils import Utils
 
 
 class ExtractorService():
+
+    @staticmethod
+    def getScrapySantoCancaoNova(url="https://santo.cancaonova.com/"):
+        page = requests.get(url)
+        if page.status_code != 200:
+            return {"error": f"Não foi possível acessar {url}, status {page.status_code}"}
+
+        soup = BeautifulSoup(page.content, 'html.parser')
+
+        data = {}
+
+        # data
+        data["day"] = soup.select_one("#date-post .dia").get_text(strip=True) if soup.select_one("#date-post .dia") else None
+        data["month"] = soup.select_one("#date-post .mes").get_text(strip=True) if soup.select_one("#date-post .mes") else None
+        data["year"] = soup.select_one("#date-post .ano").get_text(strip=True) if soup.select_one("#date-post .ano") else None
+
+        # título
+        title_tag = soup.find("h1", class_="entry-title")
+        data["title"] = title_tag.get_text(strip=True) if title_tag else None
+
+        # imagem
+        first_img = soup.select_one(".entry-content img")
+        data["image"] = first_img["src"] if first_img and first_img.has_attr("src") else None
+
+        # texto principal
+        entry_content = soup.select_one(".entry-content")
+        if entry_content:
+            paragraphs = [p.get_text(" ", strip=True) for p in entry_content.find_all("p")]
+            data["full_text"] = "\n\n".join(paragraphs)
+        else:
+            data["full_text"] = None
+
+        # lista de outros santos (se houver)
+        outros_santos = []
+        ul = entry_content.find("ul") if entry_content else None
+        if ul:
+            for li in ul.find_all("li"):
+                outros_santos.append(li.get_text(" ", strip=True))
+        data["outros_santos"] = outros_santos if outros_santos else None
+
+        return data
     
     def getScrapySagradaLiturgia(date):
         if date == None:

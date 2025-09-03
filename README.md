@@ -19,6 +19,9 @@ https://api-liturgia-diaria.vercel.app/?date=2024-11-25
 ## URL Canção Nova
 https://api-liturgia-diaria.vercel.app/cn
 
+## URL Canção Nova Santo do Dia
+https://api-liturgia-diaria.vercel.app/santo-do-dia
+
 ## Fonte
 1. https://sagradaliturgia.com.br/
 2. Canção Nova

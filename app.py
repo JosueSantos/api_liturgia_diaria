@@ -31,5 +31,17 @@ def cancaoNova():
 
     return jsonify(response)
 
+@app.route('/santo-do-dia')
+def santo():
+    santo = ExtractorService.getScrapySantoCancaoNova()
+
+    response = {
+        'objective': 'A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a criação de aplicações que almejam a evangelização.',
+        'source':'Canção Nova',
+        'today': santo
+    }
+
+    return jsonify(response)
+
 # if __name__ == '__main__':
 #     app.run(debug=True)
