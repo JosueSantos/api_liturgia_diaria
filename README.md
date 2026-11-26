@@ -50,7 +50,7 @@ O servidor local inicia com depuração desativada.
 
 ## Deploy e verificação de produção
 
-O Vercel carrega a aplicação Flask exportada como `app` em `app.py` e aplica as configurações de função e cabeçalhos de `vercel.json`. A aplicação não depende de Node.js; configure Node.js 26.x nas configurações de build do projeto Vercel para que o deploy seja aceito. Depois de publicar, valide:
+O Vercel detecta a aplicação Flask exportada como `app` em `app.py` e aplica os cabeçalhos de `vercel.json`. A aplicação não depende de Node.js; configure Node.js 26.x nas configurações de build do projeto Vercel para que o deploy seja aceito. Depois de publicar, valide:
 
 - `https://api-liturgia-diaria.vercel.app/healthz` — deve retornar `{"status":"ok"}`.
 - `https://api-liturgia-diaria.vercel.app/?date=2026-11-26` — deve retornar HTTP 200 e `source: "CNBB"`.
