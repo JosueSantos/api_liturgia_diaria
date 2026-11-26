@@ -1,0 +1,14 @@
+{
+  "name": "liturgia-html-styles",
+  "private": true,
+  "engines": {
+    "node": ">=14"
+  },
+  "scripts": {
+    "build:html": "node scripts/build-html-css.js"
+  },
+  "devDependencies": {
+    "postcss": "8.5.33",
+    "tailwindcss": "3.4.17"
+  }
+}

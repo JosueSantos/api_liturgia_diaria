@@ -1,1 +1,4 @@
 *.pyc
+.venv/
+node_modules/
+extractor/__pycache__/
