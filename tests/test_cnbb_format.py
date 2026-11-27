@@ -178,6 +178,114 @@ class CnbbFormattingTests(unittest.TestCase):
         )
         self.assertEqual(readings_of(result, 'psalm')[0]['ref'], 'Sl 96(97),1.6.11-12')
 
+    def test_psalm_content_stops_at_font_wrapped_reading_heading(self):
+        body = (
+            '<center>PRIMEIRA LEITURA</center><p>Leitura.</p>'
+            + responsorial_psalm('Sl 30(31),2.6.12-13').replace(
+                'min-width:30px',
+                'min-width: 30px',
+            )
+            + '<font color="red"><center>SEGUNDA LEITURA</center></font>'
+            + verse_row('14', 'Irmãos: temos um sumo sacerdote eminente.')
+            + verse_row('15', 'Ele se compadece de nossas fraquezas.')
+            + '<center>EVANGELHO</center><p>Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-26', body))
+
+        self.assertEqual(
+            readings_of(result, 'psalm')[0]['content_psalm'],
+            ['Texto do salmo.'],
+        )
+        self.assertEqual(
+            [entry['text'] for entry in readings_of(result, 'second_reading')[0]['text_array']],
+            [
+                'Irmãos: temos um sumo sacerdote eminente.',
+                'Ele se compadece de nossas fraquezas.',
+            ],
+        )
+
+    def test_psalm_stops_before_numbered_hidden_reading_heading(self):
+        body = (
+            '<center>PRIMEIRA LEITURA</center><p>Leitura.</p>'
+            '<font color="red">Salmo responsorial</font>'
+            '<font color="tomato">Sl 147,12-13.14-15.19-20</font><br>'
+            '<font color="red">R.</font>Glorifica o Senhor.<br><br>'
+            + verse_row('12', 'Glorifica o Senhor, Jerusalém.')
+            + verse_row('13', 'Seus filhos em teu seio abençoou.')
+            + '<div><h3 class="title-leitura">2ª Leitura - 1Cor 10,16-17</h3></div>'
+            + '<center>SEGUNDA LEITURA</center><p>Leitura seguinte.</p>'
+            + '<center>EVANGELHO</center><p>Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2026-06-04', body))
+        psalm = readings_of(result, 'psalm')[0]
+
+        self.assertEqual(psalm['title'], 'Salmo responsorial')
+        self.assertEqual(psalm['ref'], 'Sl 147,12-13.14-15.19-20')
+        self.assertEqual(
+            psalm['content_psalm'],
+            ['Glorifica o Senhor, Jerusalém. Seus filhos em teu seio abençoou.'],
+        )
+
+    def test_psalm_with_35px_verse_columns_keeps_stanzas_and_response(self):
+        def psalm_row(number, text, has_refrain=False):
+            refrain = (
+                '<span class="refrao_salmo"><font color="#ff0000">R.</font></span>'
+                if has_refrain else ''
+            )
+            return (
+                '<div><div style="display:flex;flex-direction:row;align-items:flex-start">'
+                f'<div style="text-align:left;min-width:35px">{number}</div>'
+                f'<div><div style="flex:1"><div>{text}{refrain}</div></div></div>'
+                '</div></div>'
+            )
+
+        body = (
+            '<center>PRIMEIRA LEITURA</center><p>Leitura.</p>'
+            '<font color="red">Salmo responsorial</font>'
+            '<font color="tomato">Sl 115(116B),12-13.15-16bc.17-18</font><br>'
+            '<br><span class="refrao_salmo"><font color="#ff0000">R.</font>'
+            'Refrão do salmo.<br><br>'
+            + psalm_row('12', 'Primeiro verso.')
+            + '</span>'
+            + psalm_row('13', 'Segundo verso.', has_refrain=True)
+            + psalm_row('15', 'Terceiro verso.')
+            + psalm_row('16bc', 'Quarto verso.', has_refrain=True)
+            + '<font color="red"><center>SEGUNDA LEITURA</center></font>'
+            '<p>Texto da segunda leitura.</p>'
+            '<center>EVANGELHO</center><p>Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-25', body))
+        psalm = readings_of(result, 'psalm')[0]
+
+        self.assertEqual(psalm['response'], 'Refrão do salmo.')
+        self.assertEqual(
+            psalm['content_psalm'],
+            [
+                'Primeiro verso. Segundo verso.',
+                'Terceiro verso. Quarto verso.',
+            ],
+        )
+
+    def test_psalm_without_verse_markup_does_not_count_reference_or_refrain(self):
+        body = (
+            '<center>PRIMEIRA LEITURA</center><p>Leitura.</p>'
+            '<font color="red">Salmo responsorial</font>'
+            '<font color="tomato">Sl 18B(19),8.9.10.11</font><br>'
+            '<font color="#ff0000">R.</font>Senhor, tens palavras de vida eterna.<br><br>'
+            '<center>SEGUNDA LEITURA</center><p>Leitura.</p>'
+            '<center>EVANGELHO</center><p>Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-27', body))
+        psalm = readings_of(result, 'psalm')[0]
+
+        self.assertEqual(psalm['ref'], 'Sl 18B(19),8.9.10.11')
+        self.assertEqual(psalm['response'], 'Senhor, tens palavras de vida eterna.')
+        self.assertEqual(psalm['content_psalm'], [])
+
     def test_separates_nested_christmas_mass_options(self):
         body = (
             '<center>NATAL DO SENHOR</center>'
@@ -258,6 +366,130 @@ class CnbbFormattingTests(unittest.TestCase):
         self.assertEqual(len(readings_of(result, 'other_reading')), 2)
         self.assertEqual(readings_for(result)[-1]['type'], 'gospel')
 
+    def test_scopes_rubrics_and_groups_optional_readings_and_sequence(self):
+        body = (
+            '<p class="MsoNormal"><span style="color:red">Rubrica do dia.</span></p>'
+            '<b>Missa da Vigília</b>'
+            '<p class="MsoNormal"><span style="color:red">'
+            'Rubrica da celebração.</span></p>'
+            '<center>PRIMEIRA LEITURA</center>'
+            '<p align="right"><i>Criação.</i></p>'
+            'Leitura do Livro do Gênesis '
+            '<font color="#ff6666">1,1-2</font>'
+            f'{verse_row("1", "Texto da primeira opção.")}'
+            '<div><i><font color="#ff0000">Todos se ajoelham.</font></i></div>'
+            '<font color="#ff0000">Ou, b:</font>'
+            '<p align="right"><i>Libertação.</i></p>'
+            'Leitura do Livro do Êxodo '
+            '<font color="#ff6666">3,1-2</font>'
+            f'{verse_row("1", "Texto da segunda opção.")}'
+            '<center>SEGUNDA LEITURA</center><p>Texto da segunda leitura.</p>'
+            '<font color="#ff0000">Sequência</font>'
+            'Espírito de Deus, enviai dos céus um raio de luz!'
+            '<center>EVANGELHO</center><p>Texto do Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2026-05-24', body))
+        vigil = result['celebrations'][0]
+        first_reading = readings_of(result, 'first_reading')[0]
+        sequence = next(reading for reading in vigil['readings'] if reading['type'] == 'sequence')
+
+        self.assertEqual(result['rubrics'], ['Rubrica do dia.'])
+        self.assertEqual(vigil['rubrics'], ['Rubrica da celebração.'])
+        self.assertEqual(
+            [option['label'] for option in first_reading['options']],
+            ['a', 'b'],
+        )
+        self.assertEqual(
+            [option['ref'] for option in first_reading['options']],
+            ['Gn 1,1-2', 'Ex 3,1-2'],
+        )
+        self.assertEqual(
+            [option['text'] for option in first_reading['options']],
+            [
+                'Texto da primeira opção. Todos se ajoelham.',
+                'Texto da segunda opção.',
+            ],
+        )
+        self.assertIn(
+            {'verse': '', 'text': 'Todos se ajoelham.', 'type': 'rubric'},
+            first_reading['options'][0]['text_array'],
+        )
+        self.assertEqual(
+            [reading['type'] for reading in vigil['readings']],
+            ['first_reading', 'second_reading', 'sequence', 'gospel'],
+        )
+        self.assertEqual(sequence['text'], 'Espírito de Deus, enviai dos céus um raio de luz!')
+        self.assertEqual(
+            sequence['text_array'],
+            [{'verse': '', 'text': sequence['text']}],
+        )
+        self.assertNotIn(
+            'Espírito de Deus',
+            readings_of(result, 'second_reading')[0]['text'],
+        )
+
+    def test_extracts_sequence_with_its_form_rubric(self):
+        body = (
+            '<center>SEGUNDA LEITURA</center><p>Texto da leitura.</p>'
+            '<b>Sequência</b><br><br>'
+            '<sup><font color="#ff0000">(Na forma mais longa; ou na forma abreviada, '
+            'a partir de: **</font></sup><sup> Eis o pão</sup>'
+            '<sup><font color="#ff0000">...)</font></sup><br><br>'
+            'Terra, exulta de alegria,<br>louva teu pastor e guia com teus hinos!'
+            '<center>EVANGELHO</center><p>Texto do Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2026-06-04', body))
+        sequence = next(
+            reading for reading in readings_for(result)
+            if reading['type'] == 'sequence'
+        )
+
+        self.assertIn('Na forma mais longa', sequence['rubrics'][0])
+        self.assertIn('Eis o pão', sequence['rubrics'][0])
+        self.assertTrue(sequence['text'].startswith('Terra, exulta de alegria'))
+        self.assertNotIn('Eis o pão', sequence['text'])
+        self.assertEqual(
+            [reading['type'] for reading in readings_for(result)],
+            ['second_reading', 'sequence', 'gospel'],
+        )
+
+    def test_groups_optional_gospels_into_options(self):
+        body = (
+            '<center>EVANGELHO</center>'
+            '<p align="right"><i>Maria junto à cruz.</i></p>'
+            '<b>Proclamação do Evangelho segundo João</b>'
+            '<font color="tomato">19,25-27</font>'
+            f'{verse_row("25", "Perto da cruz estava sua mãe.")}'
+            '<p>Palavra da Salvação.</p>'
+            '<font color="#ff6666"><i>Ou</i></font>'
+            '<font color="#ff6666">:</font>'
+            '<p align="right"><i>Uma espada te traspassará a alma.</i></p>'
+            '<b>Proclamação do Evangelho segundo Lucas</b>'
+            '<font color="tomato">2,33-35</font>'
+            f'{verse_row("33", "O pai e a mãe estavam admirados.")}'
+            '<p>Palavra da Salvação.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2026-09-15', body))
+        gospel = readings_of(result, 'gospel')[0]
+
+        self.assertEqual(
+            [option['label'] for option in gospel['options']],
+            ['a', 'b'],
+        )
+        self.assertIn('João 19,25-27', gospel['options'][0]['start'])
+        self.assertIn('Lucas 2,33-35', gospel['options'][1]['start'])
+        self.assertEqual(
+            gospel['options'][0]['text'],
+            'Perto da cruz estava sua mãe.',
+        )
+        self.assertEqual(
+            gospel['options'][1]['text'],
+            'O pai e a mãe estavam admirados.',
+        )
+
     def test_interleaves_vigil_psalms_after_each_reading(self):
         body = (
             '<div align="center">Vigília Pascal na Noite Santa</div>'
@@ -320,6 +552,26 @@ class CnbbFormattingTests(unittest.TestCase):
             expected_psalm_refs,
         )
 
+    def test_splits_unnumbered_vigil_psalm_at_red_refrain_markers(self):
+        body = (
+            '<div align="center">Vigília Pascal na Noite Santa</div>'
+            '<center>CARTA</center><p>Carta.</p>'
+            '<font color="red">Salmo responsorial</font>'
+            '<font color="tomato">Sl 117(118),1-2.16ab-17.22-23</font><br>'
+            '<font color="red">R.</font> Aleluia.<br><br>'
+            'Primeira estrofe.'
+            '<span><font color="#ff0000">R.</font> Segunda estrofe.</span>'
+            '<span><font color="#ff0000">R.</font> Terceira estrofe.</span>'
+            '<center>EVANGELHO</center><p>Evangelho.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-27', body))
+
+        self.assertEqual(
+            readings_of(result, 'psalm')[0]['content_psalm'],
+            ['Primeira estrofe.', 'Segunda estrofe.', 'Terceira estrofe.'],
+        )
+
     def test_extracts_reference_and_liturgy_fields_from_readings(self):
         body = (
             '<center>PRIMEIRA LEITURA</center>'
@@ -364,6 +616,37 @@ class CnbbFormattingTests(unittest.TestCase):
         self.assertEqual(second['footer'], 'Palavra do Senhor.')
         self.assertEqual(second['footer_response'], 'Graças a Deus.')
 
+    def test_skips_note_font_before_first_reading_citation(self):
+        body = (
+            '<font color="red"><center>PRIMEIRA LEITURA</center></font>'
+            '<p align="right"><i>Eu te farei luz das nações, para que minha salvação '
+            'chegue até aos confins da terra.<br> </i>'
+            '<font size="-1">(Segundo canto do Servo do Senhor).</font></p>'
+            'Leitura do Livro do Profeta Isaías '
+            '<font color="#ff6666">49,1-6</font>'
+            f'{verse_row("1", "Nações marinhas, ouvi-me.")}'
+            '<p>Palavra do Senhor.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-23', body))
+        first_reading = readings_of(result, 'first_reading')[0]
+
+        self.assertEqual(
+            first_reading['pre'],
+            'Eu te farei luz das nações, para que minha salvação chegue até aos confins da terra. '
+            '(Segundo canto do Servo do Senhor).',
+        )
+        self.assertEqual(first_reading['ref'], 'Is 49,1-6')
+        self.assertEqual(
+            first_reading['start'],
+            'Leitura do Livro do Profeta Isaías 49,1-6',
+        )
+        self.assertEqual(first_reading['text'], 'Nações marinhas, ouvi-me.')
+        self.assertEqual(
+            first_reading['text_array'],
+            [{'verse': '1', 'text': 'Nações marinhas, ouvi-me.', 'type': 'verse'}],
+        )
+
     def test_builds_text_array_for_readings_and_gospel(self):
         body = (
             '<center>PRIMEIRA LEITURA</center>'
@@ -401,15 +684,15 @@ class CnbbFormattingTests(unittest.TestCase):
             first['text_array'],
             [
                 {'verse': '', 'text': 'Eu, João,'},
-                {'verse': '1', 'text': 'vi outro anjo descendo do céu.'},
-                {'verse': '2', 'text': 'Ele gritou com voz poderosa.'},
-                {'verse': '3', 'text': 'Ouvi uma voz poderosa.'},
-                {'verse': '21', 'text': 'Um anjo poderoso levantou uma pedra.'},
-                {'verse': '22', 'text': 'A cidade foi lançada ao mar.'},
-                {'verse': '23', 'text': 'Nunca mais será encontrada.'},
-                {'verse': '19,1', 'text': 'E um anjo me disse:'},
-                {'verse': '2', 'text': 'Felizes são os convidados.'},
-                {'verse': '9a', 'text': 'para o banquete das núpcias do Cordeiro.'},
+                {'verse': '1', 'text': 'vi outro anjo descendo do céu.', 'type': 'verse'},
+                {'verse': '2', 'text': 'Ele gritou com voz poderosa.', 'type': 'verse'},
+                {'verse': '3', 'text': 'Ouvi uma voz poderosa.', 'type': 'verse'},
+                {'verse': '21', 'text': 'Um anjo poderoso levantou uma pedra.', 'type': 'verse'},
+                {'verse': '22', 'text': 'A cidade foi lançada ao mar.', 'type': 'verse'},
+                {'verse': '23', 'text': 'Nunca mais será encontrada.', 'type': 'verse'},
+                {'verse': '19,1', 'text': 'E um anjo me disse:', 'type': 'verse'},
+                {'verse': '2', 'text': 'Felizes são os convidados.', 'type': 'verse'},
+                {'verse': '9a', 'text': 'para o banquete das núpcias do Cordeiro.', 'type': 'verse'},
             ],
         )
 
@@ -418,10 +701,63 @@ class CnbbFormattingTests(unittest.TestCase):
             gospel['text_array'],
             [
                 {'verse': '', 'text': 'Naquele tempo,'},
-                {'verse': '20', 'text': 'Jerusalém será cercada por exércitos.'},
-                {'verse': '21', 'text': 'Então, os que estiverem na Judeia fujam para as montanhas.'},
+                {'verse': '20', 'text': 'Jerusalém será cercada por exércitos.', 'type': 'verse'},
+                {'verse': '21', 'text': 'Então, os que estiverem na Judeia fujam para as montanhas.', 'type': 'verse'},
             ],
         )
+
+    def test_marks_passion_verses_rubrics_and_highlights(self):
+        body = (
+            '<center>EVANGELHO</center>'
+            '<p align="right"><i>Preparação do Evangelho.</i></p>'
+            '<b>Paixão de Nosso Senhor Jesus Cristo segundo João </b>'
+            '<font color="tomato">19,30-31</font>'
+            '<p>Eu, João,</p>'
+            '<p><i>A prisão de Jesus.</i></p>'
+            f'{verse_row("30", "Ele tomou o vinagre e disse: Tudo está consumado.")}'
+            '<div><span class="tabulacao"><i><font color="#ff0000">'
+            'Todos se ajoelham e faz-se uma pausa.'
+            '</font></i></span></div>'
+            '<div><span class="tabulacao"><i>E logo saiu sangue e água.</i></span></div>'
+            f'{verse_row("31", "Era o dia da preparação para a Páscoa.")}'
+            '<p>Palavra da Salvação.</p>'
+        )
+
+        result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-26', body))
+        gospel = readings_of(result, 'gospel')[0]
+
+        self.assertEqual(
+            gospel['text_array'],
+            [
+                {'verse': '', 'text': 'Eu, João,'},
+                {
+                    'verse': '',
+                    'text': 'A prisão de Jesus.',
+                    'type': 'highlight',
+                },
+                {
+                    'verse': '30',
+                    'text': 'Ele tomou o vinagre e disse: Tudo está consumado.',
+                    'type': 'verse',
+                },
+                {
+                    'verse': '',
+                    'text': 'Todos se ajoelham e faz-se uma pausa.',
+                    'type': 'rubric',
+                },
+                {
+                    'verse': '',
+                    'text': 'E logo saiu sangue e água.',
+                    'type': 'highlight',
+                },
+                {
+                    'verse': '31',
+                    'text': 'Era o dia da preparação para a Páscoa.',
+                    'type': 'verse',
+                },
+            ],
+        )
+        self.assertEqual(gospel['footer'], 'Palavra da Salvação.')
 
     def test_builds_text_array_when_source_has_no_verse_markup(self):
         body = (
@@ -456,7 +792,7 @@ class CnbbFormattingTests(unittest.TestCase):
         self.assertEqual(first_reading['footer'], 'Palavra do Senhor.')
         self.assertEqual(
             first_reading['text_array'],
-            [{'verse': '1', 'text': 'Texto da leitura.'}],
+            [{'verse': '1', 'text': 'Texto da leitura.', 'type': 'verse'}],
         )
 
     def test_cnbb_route_uses_short_source_label(self):

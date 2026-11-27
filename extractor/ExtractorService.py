@@ -67,6 +67,12 @@ class ExtractorService():
         def citation_signature(value):
             return re.sub(r'[^0-9a-z]', '', normalize(value))
 
+        def psalm_number_style(style):
+            return bool(
+                style
+                and re.search(r'min-width\s*:\s*(?:30|35)px', style, re.IGNORECASE)
+            )
+
         reference_candidates = []
         for field in ('leituras', 'details'):
             reference_soup = BeautifulSoup(content.get(field, ''), 'html.parser')
@@ -138,6 +144,7 @@ class ExtractorService():
 
         soup = BeautifulSoup(content.get('body', ''), 'html.parser')
         tokens = []
+        sequence_annotation_nodes = set()
         has_responsorial_markers = any(
             normalize(' '.join(str(marker).split())) == 'salmo responsorial'
             for marker in soup.find_all(string=True)
@@ -151,11 +158,13 @@ class ExtractorService():
                     title = ' '.join(heading.get_text(' ', strip=True).split())
 
             reference = None
+            reference_tag = None
             for tag in fragment.find_all('font'):
                 tag_text = ' '.join(tag.get_text(' ', strip=True).split())
                 color = (tag.get('color') or '').lower()
                 if tag_text and color and normalize(tag_text).replace('.', '').strip() != 'r':
                     reference = tag_text
+                    reference_tag = tag
                     break
             if reference:
                 reference = re.sub(r'^SI(?=\s*\d)', 'Sl', reference)
@@ -169,8 +178,20 @@ class ExtractorService():
             response = None
             refrain = fragment.select_one('.refrao_salmo')
             response_marker = None
+            response_nodes = []
             if refrain:
-                response = re.sub(r'^R\.?\s*', '', refrain.get_text(' ', strip=True)).strip()
+                response_fragment = BeautifulSoup(str(refrain), 'html.parser')
+                for number_block in response_fragment.find_all(
+                    ['div', 'span'],
+                    style=psalm_number_style,
+                ):
+                    if number_block.parent:
+                        number_block.parent.decompose()
+                response = re.sub(
+                    r'^R\.?\s*',
+                    '',
+                    response_fragment.get_text(' ', strip=True),
+                ).strip()
             else:
                 for marker in fragment.find_all(['font', 'span']):
                     color = (marker.get('color') or marker.get('style') or '').lower()
@@ -182,8 +203,9 @@ class ExtractorService():
                     response_parts = []
                     consecutive_breaks = 0
                     for sibling in marker.next_siblings:
-                        if isinstance(sibling, Tag) and sibling.name == 'div' and sibling.find(
-                            'div', style=lambda style: style and 'min-width: 30px' in style
+                        if isinstance(sibling, Tag) and sibling.find(
+                            ['div', 'span'],
+                            style=psalm_number_style,
                         ):
                             break
                         if isinstance(sibling, Tag) and sibling.name == 'br':
@@ -199,14 +221,15 @@ class ExtractorService():
                             continue
                         if sibling_text:
                             response_parts.append(sibling_text)
+                            response_nodes.append(sibling)
                             consecutive_breaks = 0
                     response = ' '.join(' '.join(response_parts).split()) or None
                     break
 
             content_psalm = []
             number_blocks = fragment.find_all(
-                'div',
-                style=lambda style: style and 'min-width: 30px' in style,
+                ['div', 'span'],
+                style=psalm_number_style,
             )
             for number_block in number_blocks:
                 verse_row = number_block.parent
@@ -220,25 +243,54 @@ class ExtractorService():
                         content_psalm.append(verse_text)
 
             if not content_psalm:
+                if reference_tag:
+                    reference_tag.decompose()
                 if refrain:
                     refrain.decompose()
                 if response_marker:
                     response_marker.decompose()
+                for response_node in response_nodes:
+                    response_node.extract()
                 current_parts = []
                 consecutive_breaks = 0
-                for child in fragment.contents:
-                    if isinstance(child, Tag) and child.name == 'br':
+
+                def finish_stanza(has_refrain_marker=False):
+                    if current_parts:
+                        stanza = ' '.join(current_parts).strip()
+                        if has_refrain_marker:
+                            stanza += ' R.'
+                        content_psalm.append(stanza)
+                        current_parts.clear()
+
+                def collect_psalm_text(node):
+                    nonlocal consecutive_breaks
+                    if isinstance(node, NavigableString):
+                        child_text = ' '.join(str(node).split())
+                        if child_text:
+                            current_parts.append(child_text)
+                            consecutive_breaks = 0
+                        return
+                    if not isinstance(node, Tag):
+                        return
+                    if node.name in ('font', 'span'):
+                        marker_text = normalize(node.get_text(' ', strip=True)).replace('.', '').strip()
+                        color = (node.get('color') or node.get('style') or '').lower()
+                        if marker_text == 'r' and (
+                            'red' in color or '#ff0000' in color
+                        ):
+                            finish_stanza(has_refrain_marker=True)
+                            return
+                    if node.name == 'br':
                         consecutive_breaks += 1
-                        if consecutive_breaks >= 2 and current_parts:
-                            content_psalm.append(' '.join(current_parts).strip())
-                            current_parts = []
-                        continue
-                    child_text = child.get_text(' ', strip=True) if isinstance(child, Tag) else str(child).strip()
-                    if child_text:
-                        current_parts.append(child_text)
-                        consecutive_breaks = 0
-                if current_parts:
-                    content_psalm.append(' '.join(current_parts).strip())
+                        if consecutive_breaks >= 2:
+                            finish_stanza()
+                        return
+                    for child in node.children:
+                        collect_psalm_text(child)
+
+                for child in fragment.contents:
+                    collect_psalm_text(child)
+                finish_stanza()
 
             stanzas = []
             stanza_verses = []
@@ -257,7 +309,7 @@ class ExtractorService():
         def verse_row(node):
             number_block = node.find(
                 'div',
-                style=lambda style: style and re.search(r'min-width\s*:\s*30px', style, re.IGNORECASE),
+                style=psalm_number_style,
                 recursive=False,
             )
             if not number_block:
@@ -275,41 +327,96 @@ class ExtractorService():
             return {
                 'number': number,
                 'text': ' '.join(verse_text.split()),
+                'type': 'verse',
             }
+
+        def inside_verse_row(node):
+            parent = node.parent
+            while isinstance(parent, Tag):
+                if parent.name == 'div' and verse_row(parent):
+                    return True
+                parent = parent.parent
+            return False
+
+        def markup_before_heading(sibling, heading):
+            fragment = BeautifulSoup(str(sibling), 'html.parser')
+            heading_text = ' '.join(heading.get_text(' ', strip=True).split())
+            target = next(
+                (
+                    tag for tag in fragment.find_all(heading.name)
+                    if ' '.join(tag.get_text(' ', strip=True).split()) == heading_text
+                ),
+                None,
+            )
+            if not target:
+                return ''
+
+            current = target
+            while current:
+                parent = current.parent
+                if parent is None:
+                    break
+                for following in list(current.next_siblings):
+                    following.extract()
+                if current is target:
+                    current.extract()
+                if isinstance(parent, BeautifulSoup):
+                    break
+                current = parent
+            return ''.join(str(child) for child in fragment.contents)
 
         def psalm_siblings_markup(marker):
             markup = []
             has_psalm_content = False
             included_psalm_heading = False
-            for sibling in marker.parent.next_siblings:
-                if isinstance(sibling, Tag):
-                    sibling_text = ' '.join(sibling.get_text(' ', strip=True).split())
-                    if sibling.name == 'center' and heading_marker(sibling_text):
-                        break
-                    if sibling.name == 'b' and normalize(sibling_text).startswith('missa '):
-                        break
-                    if sibling.name == 'font':
-                        normalized = normalize(sibling_text)
-                        if normalized in ('salmo responsorial', 'aclamacao ao evangelho'):
-                            break
-                    if sibling.name == 'div':
-                        heading = sibling.find('h3', class_='title-leitura', recursive=False)
-                        if heading:
+            container = marker.parent
+            while isinstance(container, Tag):
+                for sibling in container.next_siblings:
+                    if isinstance(sibling, Tag):
+                        sibling_text = ' '.join(sibling.get_text(' ', strip=True).split())
+                        psalm_heading_allowed = False
+                        heading_tags = (
+                            [sibling] if sibling.name in ('center', 'h3') else []
+                        ) + sibling.find_all(['center', 'h3'])
+                        for heading in heading_tags:
+                            title = ' '.join(heading.get_text(' ', strip=True).split())
+                            title_marker = heading_marker(title)
+                            if not title_marker:
+                                continue
                             if (
-                                not normalize(heading.get_text(' ', strip=True)).startswith('salmo -')
-                                or has_psalm_content
-                                or included_psalm_heading
+                                heading.name == 'h3'
+                                and title_marker['kind'] == 'psalm'
+                                and not has_psalm_content
+                                and not included_psalm_heading
                             ):
-                                break
-                            included_psalm_heading = True
-                        if sibling.find(
-                            'div',
-                            style=lambda style: style and re.search(r'min-width\s*:\s*30px', style, re.IGNORECASE),
+                                included_psalm_heading = True
+                                psalm_heading_allowed = True
+                                continue
+                            markup.append(markup_before_heading(sibling, heading))
+                            return ''.join(markup)
+
+                        sibling_marker = heading_marker(sibling_text)
+                        if sibling_marker and not (
+                            sibling_marker['kind'] == 'psalm'
+                            and psalm_heading_allowed
                         ):
+                            return ''.join(markup)
+                        if (
+                            sibling.name == 'b'
+                            and normalize(sibling_text).startswith('missa ')
+                        ):
+                            return ''.join(markup)
+                        if normalize(sibling_text) in (
+                            'salmo responsorial',
+                            'aclamacao ao evangelho',
+                        ):
+                            return ''.join(markup)
+                        if sibling.find(['div', 'span'], style=psalm_number_style):
                             has_psalm_content = True
-                    if sibling.name == 'font' and (sibling.get('color') or '').lower() == 'tomato':
-                        has_psalm_content = True
-                markup.append(str(sibling))
+                        if sibling.find('font', color='tomato'):
+                            has_psalm_content = True
+                    markup.append(str(sibling))
+                container = container.parent
             return ''.join(markup)
 
         def heading_marker(label):
@@ -331,9 +438,18 @@ class ExtractorService():
                 'nona': 'other_reading',
                 'decima': 'other_reading',
             }
-            match = re.match(r'^(primeira|segunda|terceira|quarta|quinta|sexta|setima|oitava|nona|decima)\s+leitura\b', normalized)
+            match = re.match(
+                r'^(primeira|segunda|terceira|quarta|quinta|sexta|setima|oitava|nona|decima|(\d+)[a-z]*)\s+leitura\b',
+                normalized,
+            )
             if match:
-                return {'kind': ordinals[match.group(1)], 'title': label}
+                ordinal = match.group(1)
+                kind = ordinals.get(ordinal)
+                if not kind:
+                    kind = 'first_reading' if match.group(2) == '1' else (
+                        'second_reading' if match.group(2) == '2' else 'other_reading'
+                    )
+                return {'kind': kind, 'title': label}
             if normalized.startswith('carta'):
                 return {'kind': 'other_reading', 'title': label}
             return None
@@ -385,12 +501,93 @@ class ExtractorService():
 
             if not isinstance(node, Tag) or node.name in ('meta', 'script', 'style'):
                 return
+            if id(node) in sequence_annotation_nodes:
+                return
 
             text = ' '.join(node.get_text(' ', strip=True).split())
+            if node.name in ('font', 'span', 'b'):
+                normalized_text = normalize(text)
+                color = (node.get('color') or node.get('style') or '').lower()
+                option_match = re.fullmatch(r'ou,\s*([a-z])\s*:', normalized_text)
+                if option_match and (
+                    'red' in color or '#ff0000' in color
+                ):
+                    tokens.append({
+                        'kind': 'optional_reading',
+                        'label': option_match.group(1),
+                    })
+                    return
+                if normalized_text == ':' and '#ff6666' in color:
+                    return
+                if (
+                    normalized_text in ('ou', 'ou:')
+                    and '#ff6666' in color
+                    and not node.find_parent(class_='refrao_salmo')
+                ):
+                    tokens.append({'kind': 'optional_reading', 'label': 'b'})
+                    return
+                if normalized_text == 'sequencia' and (
+                    'red' in color or '#ff0000' in color
+                    or node.name == 'b'
+                ):
+                    sequence_rubrics = []
+                    annotation_started = False
+                    for sibling in node.next_siblings:
+                        if isinstance(sibling, Tag) and sibling.name == 'br':
+                            if annotation_started:
+                                break
+                            continue
+                        if isinstance(sibling, Tag) and sibling.name == 'sup':
+                            sequence_rubrics.append(
+                                ' '.join(sibling.get_text(' ', strip=True).split())
+                            )
+                            sequence_annotation_nodes.add(id(sibling))
+                            annotation_started = True
+                            continue
+                        if isinstance(sibling, NavigableString) and not str(sibling).strip():
+                            continue
+                        break
+                    token = {'kind': 'sequence', 'title': text}
+                    rubric = ' '.join(sequence_rubrics).strip()
+                    if rubric:
+                        token['rubrics'] = [rubric]
+                    tokens.append(token)
+                    return
+            if node.name == 'p' and node.get('align') != 'right':
+                red_elements = [node, *node.find_all(['font', 'span'])]
+                if any(
+                    'red' in (element.get('color') or element.get('style') or '').lower()
+                    or '#ff0000' in (element.get('color') or element.get('style') or '').lower()
+                    for element in red_elements
+                ):
+                    tokens.append({'kind': 'rubric', 'text': text})
+                    return
             if node.name == 'div':
                 verse = verse_row(node)
                 if verse:
                     tokens.append({'kind': 'verse', **verse})
+                if (
+                    psalm_number_style(node.get('style', ''))
+                    and isinstance(node.parent, Tag)
+                    and verse_row(node.parent)
+                ):
+                    return
+            if node.name in ('i', 'em') and not inside_verse_row(node):
+                parent = node.parent
+                in_preparation = False
+                while isinstance(parent, Tag):
+                    if parent.name == 'p' and parent.get('align') == 'right':
+                        in_preparation = True
+                        break
+                    parent = parent.parent
+                if not in_preparation and text:
+                    red_font = node if node.name == 'font' else node.find('font')
+                    color = (red_font.get('color') or '').lower() if red_font else ''
+                    tokens.append({
+                        'kind': 'rubric' if color in ('red', '#ff0000', '#f00') else 'highlight',
+                        'text': text,
+                    })
+                    return
             if (
                 node.name == 'center'
                 and not node.find('center')
@@ -440,11 +637,17 @@ class ExtractorService():
         for child in soup.contents:
             walk(child)
 
+        scripture_types = {'first_reading', 'second_reading', 'other_reading', 'gospel'}
         sections = []
         current_section = None
         current_celebration = soup.title.get_text(' ', strip=True) if soup.title else data['entry_title']
         if 'vigilia pascal' not in normalize(current_celebration):
             current_celebration = data['entry_title'] or 'Liturgia do dia'
+        current_celebration_explicit = False
+        celebration_order = []
+        celebration_rubrics = {}
+        day_rubrics = []
+        option_group_number = 0
 
         def finish_section():
             if current_section is None:
@@ -457,17 +660,52 @@ class ExtractorService():
                 if current_section is not None:
                     current_section['_text_parts'].append(token['text'])
                 continue
+            if token['kind'] == 'optional_reading':
+                if current_section and current_section['type'] in scripture_types:
+                    if '_option_group' not in current_section:
+                        option_group_number += 1
+                        current_section['_option_group'] = option_group_number
+                        current_section['_option_label'] = 'a'
+                    option_group = current_section['_option_group']
+                    section_type = current_section['type']
+                    section_title = current_section['title']
+                    celebration = current_section['celebration']
+                    finish_section()
+                    current_section = {
+                        'type': section_type,
+                        'title': section_title,
+                        'celebration': celebration,
+                        '_option_group': option_group,
+                        '_option_label': token['label'],
+                        '_text_parts': [],
+                        '_text_array_items': [],
+                    }
+                continue
             if token['kind'] == 'verse':
                 if current_section is not None:
                     if '_verse_entries' not in current_section:
                         current_section['_before_first_verse'] = ' '.join(current_section['_text_parts']).strip()
                         current_section['_verse_entries'] = []
                     current_section['_verse_entries'].append(token)
+                    current_section['_text_array_items'].append(token)
+                continue
+            if token['kind'] in ('rubric', 'highlight'):
+                if current_section is not None:
+                    current_section['_text_parts'].append(token['text'])
+                    current_section['_text_array_items'].append(token)
+                elif token['kind'] == 'rubric':
+                    if current_celebration_explicit:
+                        celebration_rubrics.setdefault(current_celebration, []).append(token['text'])
+                    else:
+                        day_rubrics.append(token['text'])
                 continue
             if token['kind'] == 'celebration':
                 finish_section()
                 current_section = None
                 current_celebration = token['title']
+                current_celebration_explicit = True
+                if current_celebration not in celebration_order:
+                    celebration_order.append(current_celebration)
                 continue
 
             finish_section()
@@ -476,11 +714,14 @@ class ExtractorService():
                 'title': token['title'],
                 'celebration': current_celebration,
                 '_text_parts': [],
+                '_text_array_items': [],
             }
             if token['kind'] == 'psalm':
                 current_section['ref'] = token.get('ref')
                 current_section['response'] = token.get('response')
                 current_section['content_psalm'] = token.get('content_psalm', [])
+            if token['kind'] == 'sequence' and token.get('rubrics'):
+                current_section['rubrics'] = token['rubrics']
         finish_section()
 
         def acclamation_fields(acclamation):
@@ -510,6 +751,8 @@ class ExtractorService():
                 acclamations_by_celebration.setdefault(section['celebration'], []).append(section)
 
         gospel_index = 0
+        gospel_option_centers = {}
+        gospel_option_indexes = {}
         for section in sections:
             if section['type'] != 'gospel':
                 continue
@@ -518,11 +761,42 @@ class ExtractorService():
             acclamation = acclamations.pop(0) if acclamations else None
             fields = acclamation_fields(acclamation)
 
-            center = gospel_centers[gospel_index] if gospel_index < len(gospel_centers) else None
-            gospel_index += 1
-            pre_tag = center.find_next('p', align='right') if center else None
-            start_tag = center.find_next('b') if center else None
-            citation_tag = start_tag.find_next('font') if start_tag else None
+            option_group = section.get('_option_group')
+            if option_group is not None and option_group in gospel_option_centers:
+                center_index = gospel_option_centers[option_group]
+                option_index = gospel_option_indexes[option_group]
+                gospel_option_indexes[option_group] += 1
+            else:
+                center_index = gospel_index
+                gospel_index += 1
+                option_index = 0
+                if option_group is not None:
+                    gospel_option_centers[option_group] = center_index
+                    gospel_option_indexes[option_group] = 1
+
+            center = (
+                gospel_centers[center_index]
+                if center_index < len(gospel_centers)
+                else None
+            )
+            pre_tags = [
+                tag for tag in center.find_all_next('p', align='right')
+                if tag.find_previous('center') is center
+            ] if center else []
+            start_tags = [
+                tag for tag in center.find_all_next('b')
+                if tag.find_previous('center') is center
+            ] if center else []
+            pre_tag = pre_tags[option_index] if option_index < len(pre_tags) else None
+            start_tag = start_tags[option_index] if option_index < len(start_tags) else None
+            citation_tag = next(
+                (
+                    tag for tag in start_tag.find_all_next('font')
+                    if tag.find_previous('center') is center
+                    and re.match(r'^\d+\s*[,.]\s*\d+', tag.get_text(' ', strip=True))
+                ),
+                None,
+            ) if start_tag else None
             pre = ' '.join(pre_tag.get_text(' ', strip=True).split()) if pre_tag else None
             start_parts = [
                 ' '.join(tag.get_text(' ', strip=True).split())
@@ -574,23 +848,45 @@ class ExtractorService():
                 reading_centers[marker['kind']].append(center)
 
         reading_center_indexes = {kind: 0 for kind in reading_centers}
+        option_center_indexes = {}
+        option_indexes = {}
         for section in sections:
             section_type = section['type']
             if section_type not in reading_centers:
                 continue
-            center_index = reading_center_indexes[section_type]
+            option_group = section.get('_option_group')
+            if option_group is not None and option_group in option_center_indexes:
+                center_index = option_center_indexes[option_group]
+                option_index = option_indexes[option_group]
+                option_indexes[option_group] += 1
+            else:
+                center_index = reading_center_indexes[section_type]
+                reading_center_indexes[section_type] += 1
+                option_index = 0
+                if option_group is not None:
+                    option_center_indexes[option_group] = center_index
+                    option_indexes[option_group] = 1
             centers = reading_centers[section_type]
-            reading_center_indexes[section_type] += 1
             if center_index >= len(centers):
                 continue
 
             center = centers[center_index]
-            first_following = center.find_next(['center', 'p'])
-            if not first_following or first_following.name != 'p' or first_following.get('align') != 'right':
+            pre_tags = [
+                tag for tag in center.find_all_next('p', align='right')
+                if tag.find_previous('center') is center
+            ]
+            if option_index >= len(pre_tags):
                 continue
-            pre_tag = first_following
-            citation_tag = pre_tag.find_next('font')
-            if not citation_tag or citation_tag.find_previous('center') is not center:
+            pre_tag = pre_tags[option_index]
+            citation_tag = next(
+                (
+                    tag for tag in pre_tag.find_all_next('font')
+                    if tag.find_previous('center') is center
+                    and re.match(r'^\d+\s*[,.]\s*\d+', tag.get_text(' ', strip=True))
+                ),
+                None,
+            )
+            if not citation_tag:
                 continue
 
             pre = ' '.join(pre_tag.get_text(' ', strip=True).split())
@@ -637,6 +933,7 @@ class ExtractorService():
 
         def text_array_for(section):
             entries = section.pop('_verse_entries', [])
+            array_items = section.pop('_text_array_items', [])
             before_first_verse = section.pop('_before_first_verse', '')
             text_array = []
 
@@ -645,14 +942,34 @@ class ExtractorService():
                 return [{'verse': '', 'text': text}] if text else text_array
 
             preamble = before_first_verse
+            for entry in array_items:
+                if entry['kind'] == 'verse':
+                    break
+                annotation_start = preamble.find(entry['text'])
+                if annotation_start >= 0:
+                    preamble = (
+                        preamble[:annotation_start]
+                        + preamble[annotation_start + len(entry['text']):]
+                    )
             for prefix in (section.get('pre'), section.get('start')):
                 if prefix and preamble.startswith(prefix):
                     preamble = preamble[len(prefix):].strip()
             if preamble:
                 text_array.append({'verse': '', 'text': preamble})
-            for entry in entries:
+            last_verse_entry = next(
+                (entry for entry in reversed(array_items) if entry['kind'] == 'verse'),
+                None,
+            )
+            for entry in array_items:
+                if entry['kind'] != 'verse':
+                    text_array.append({
+                        'verse': '',
+                        'text': entry['text'],
+                        'type': entry['kind'],
+                    })
+                    continue
                 text = entry['text'].strip()
-                if entry is entries[-1]:
+                if entry is last_verse_entry:
                     for footer in (section.get('footer_response'), section.get('footer')):
                         if footer:
                             text = re.sub(
@@ -661,21 +978,67 @@ class ExtractorService():
                                 text,
                                 flags=re.IGNORECASE,
                             ).strip()
-                text_array.append({'verse': entry['number'], 'text': text})
+                text_array.append({
+                    'verse': entry['number'],
+                    'text': text,
+                    'type': entry['kind'],
+                })
             return text_array
 
-        scripture_types = {'first_reading', 'second_reading', 'other_reading', 'gospel'}
         for section in sections:
             if section['type'] in scripture_types:
                 section['text_array'] = text_array_for(section)
+            elif section['type'] == 'sequence':
+                section['text_array'] = (
+                    [{'verse': '', 'text': section['text']}]
+                    if section['text']
+                    else []
+                )
             else:
                 section.pop('_verse_entries', None)
                 section.pop('_before_first_verse', None)
+                section.pop('_text_array_items', None)
+
+        grouped_sections = []
+        section_index = 0
+        option_fields = (
+            'start', 'pre', 'ref', 'text_array', 'text', 'footer', 'footer_response',
+        )
+        while section_index < len(sections):
+            section = sections[section_index]
+            option_group = section.get('_option_group')
+            if option_group is None:
+                grouped_sections.append(section)
+                section_index += 1
+                continue
+
+            group_sections = []
+            while (
+                section_index < len(sections)
+                and sections[section_index].get('_option_group') == option_group
+            ):
+                group_sections.append(sections[section_index])
+                section_index += 1
+
+            base_section = group_sections[0]
+            options = []
+            for option_section in group_sections:
+                option = {'label': option_section.pop('_option_label')}
+                option_section.pop('_option_group', None)
+                option.update({
+                    field: option_section[field]
+                    for field in option_fields
+                    if field in option_section
+                })
+                options.append(option)
+            base_section['options'] = options
+            grouped_sections.append(base_section)
+        sections = grouped_sections
 
         reading_field_order = {
             'first_reading': (
                 'title', 'type', 'start', 'pre', 'ref', 'text_array', 'text',
-                'footer', 'footer_response',
+                'footer', 'footer_response', 'options',
             ),
             'second_reading': (
                 'title', 'type', 'start', 'pre', 'ref', 'text_array', 'text',
@@ -686,9 +1049,10 @@ class ExtractorService():
                 'footer', 'footer_response',
             ),
             'psalm': ('title', 'type', 'ref', 'response', 'content_psalm'),
+            'sequence': ('title', 'type', 'rubrics', 'text_array', 'text'),
             'gospel': (
                 'title', 'type', 'head_response', 'head', 'start', 'pre',
-                'ref', 'text_array', 'text', 'footer', 'footer_response',
+                'ref', 'text_array', 'text', 'footer', 'footer_response', 'options',
             ),
         }
 
@@ -707,10 +1071,20 @@ class ExtractorService():
             celebration = section['celebration']
             celebrations.setdefault(celebration, []).append(ordered_reading(section))
 
-        data['celebrations'] = [
-            {'title': title, 'readings': celebration_readings}
-            for title, celebration_readings in celebrations.items()
-        ]
+        celebration_titles = list(dict.fromkeys(
+            celebration_order
+            + list(celebrations)
+            + list(celebration_rubrics)
+        ))
+        data['celebrations'] = []
+        for title in celebration_titles:
+            celebration = {'title': title}
+            if celebration_rubrics.get(title):
+                celebration['rubrics'] = celebration_rubrics[title]
+            celebration['readings'] = celebrations.get(title, [])
+            data['celebrations'].append(celebration)
+        if day_rubrics:
+            data['rubrics'] = day_rubrics
         normalized_source_fields = {
             'date', 'title', 'color', 'details', 'leituras', 'body', 'filename',
         }
