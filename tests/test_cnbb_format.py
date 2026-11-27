@@ -37,6 +37,18 @@ def responsorial_psalm(reference):
     )
 
 
+def readings_for(result, celebration_index=0):
+    return result['celebrations'][celebration_index]['readings']
+
+
+def readings_of(result, reading_type, celebration_index=0):
+    return [
+        reading
+        for reading in readings_for(result, celebration_index)
+        if reading['type'] == reading_type
+    ]
+
+
 class CnbbFormattingTests(unittest.TestCase):
     def test_formats_weekday_and_sunday_readings(self):
         body = (
@@ -61,21 +73,35 @@ class CnbbFormattingTests(unittest.TestCase):
             body,
             'Domingo, 29 de Novembro de 2026 1º Domingo do Advento, Ano B Leituras: Is 63',
         )
+        content['source_metadata'] = 'Campo original adicional.'
 
         result = ExtractorService._formatLiturgiaCNBB(content)
 
         self.assertEqual(result['date_formatted'], '29/11/2026')
         self.assertEqual(result['entry_title'], '1º Domingo do Advento, Ano B')
         self.assertNotIn('filename', result)
-        self.assertEqual(len(result['readings']['first_readings']), 1)
-        self.assertEqual(len(result['readings']['psalms']), 1)
-        self.assertEqual(result['readings']['psalms'][0]['response'], 'Refrão do salmo.')
-        self.assertEqual(result['readings']['psalms'][0]['content_psalm'], ['Verso do salmo.'])
-        self.assertEqual(len(result['readings']['second_readings']), 1)
-        self.assertEqual(len(result['readings']['gospels']), 1)
-        self.assertNotIn('acclamations', result['readings'])
-        self.assertTrue(any(section['type'] == 'acclamation' for section in result['readings']['sections']))
-        gospel = result['readings']['gospels'][0]
+        self.assertEqual(result['title'], 'Tempo Comum')
+        self.assertEqual(result['color'], 'verde')
+        self.assertEqual(result['details'], content['details'])
+        self.assertEqual(result['leituras'], content['leituras'])
+        self.assertEqual(result['html_full'], body)
+        self.assertEqual(result['source_metadata'], 'Campo original adicional.')
+        self.assertEqual(list(result)[-3:], ['details', 'leituras', 'html_full'])
+        self.assertNotIn('body', result)
+        self.assertEqual(
+            [reading['type'] for reading in readings_for(result)],
+            ['first_reading', 'psalm', 'second_reading', 'gospel'],
+        )
+        self.assertEqual(readings_of(result, 'psalm')[0]['response'], 'Refrão do salmo.')
+        self.assertEqual(readings_of(result, 'psalm')[0]['content_psalm'], ['Verso do salmo.'])
+        gospel = readings_of(result, 'gospel')[0]
+        self.assertEqual(
+            list(gospel),
+            [
+                'title', 'type', 'head_response', 'head', 'start', 'pre',
+                'ref', 'text_array', 'text', 'footer',
+            ],
+        )
         self.assertEqual(gospel['ref'], 'Lc 21,28')
         self.assertEqual(gospel['head'], 'Levantai vossa cabeça e olhai, pois a vossa redenção se aproxima!')
         self.assertEqual(gospel['head_response'], 'Aleluia, Aleluia, Aleluia.')
@@ -83,7 +109,6 @@ class CnbbFormattingTests(unittest.TestCase):
         self.assertEqual(gospel['start'], 'Proclamação do Evangelho de Jesus Cristo segundo Lucas 21,20-28')
         self.assertEqual(gospel['text'], 'Naquele tempo, texto bíblico.')
         self.assertEqual(gospel['footer'], 'Palavra da Salvação.')
-        self.assertEqual(result['body'], body)
 
     def test_keeps_each_mass_on_special_celebration_day(self):
         body = (
@@ -103,11 +128,19 @@ class CnbbFormattingTests(unittest.TestCase):
             [celebration['title'] for celebration in result['celebrations']],
             ['Missa da manhã', 'Missa da Vigília'],
         )
-        self.assertEqual(len(result['readings']['first_readings']), 2)
-        self.assertEqual(len(result['readings']['psalms']), 2)
-        self.assertEqual(result['readings']['psalms'][0]['response'], 'Resposta da manhã.')
-        self.assertEqual(result['readings']['psalms'][1]['response'], 'Resposta da vigília.')
-        self.assertEqual(len(result['readings']['gospels']), 1)
+        self.assertEqual(len(readings_of(result, 'first_reading', 0)), 1)
+        self.assertEqual(len(readings_of(result, 'first_reading', 1)), 1)
+        self.assertEqual(len(readings_of(result, 'psalm', 0)), 1)
+        self.assertEqual(len(readings_of(result, 'psalm', 1)), 1)
+        self.assertEqual(readings_of(result, 'psalm', 0)[0]['response'], 'Resposta da manhã.')
+        self.assertEqual(readings_of(result, 'psalm', 1)[0]['response'], 'Resposta da vigília.')
+        self.assertEqual(
+            sum(
+                len(readings_of(result, 'gospel', index))
+                for index in range(len(result['celebrations']))
+            ),
+            1,
+        )
 
     def test_groups_psalm_verses_until_each_refrain_marker(self):
         def psalm_verse(number, text, has_refrain=False):
@@ -137,13 +170,13 @@ class CnbbFormattingTests(unittest.TestCase):
         result = ExtractorService._formatLiturgiaCNBB(make_content('2026-12-25', body))
 
         self.assertEqual(
-            result['readings']['psalms'][0]['content_psalm'],
+            readings_of(result, 'psalm')[0]['content_psalm'],
             [
                 'Primeiro verso. Segundo verso.',
                 'Terceiro verso. Quarto verso.',
             ],
         )
-        self.assertEqual(result['readings']['psalms'][0]['ref'], 'Sl 96(97),1.6.11-12')
+        self.assertEqual(readings_of(result, 'psalm')[0]['ref'], 'Sl 96(97),1.6.11-12')
 
     def test_separates_nested_christmas_mass_options(self):
         body = (
@@ -186,7 +219,7 @@ class CnbbFormattingTests(unittest.TestCase):
         )
         self.assertEqual(
             [
-                [section['type'] for section in celebration['sections']]
+                [reading['type'] for reading in celebration['readings']]
                 for celebration in result['celebrations']
             ],
             [
@@ -194,10 +227,10 @@ class CnbbFormattingTests(unittest.TestCase):
                 ['first_reading', 'psalm', 'second_reading', 'gospel'],
             ],
         )
-        self.assertEqual(result['celebrations'][0]['sections'][0]['ref'], 'Is 62,11-12')
-        self.assertEqual(result['celebrations'][1]['sections'][0]['ref'], 'Is 52,7-10')
-        self.assertIn('Leitura da aurora.', result['celebrations'][0]['sections'][0]['text'])
-        self.assertIn('Leitura do dia.', result['celebrations'][1]['sections'][0]['text'])
+        self.assertEqual(result['celebrations'][0]['readings'][0]['ref'], 'Is 62,11-12')
+        self.assertEqual(result['celebrations'][1]['readings'][0]['ref'], 'Is 52,7-10')
+        self.assertIn('Leitura da aurora.', result['celebrations'][0]['readings'][0]['text'])
+        self.assertIn('Leitura do dia.', result['celebrations'][1]['readings'][0]['text'])
 
     def test_keeps_vigil_readings_and_psalm_citations(self):
         body = (
@@ -217,13 +250,13 @@ class CnbbFormattingTests(unittest.TestCase):
         result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-27', body))
 
         self.assertEqual(result['celebrations'][0]['title'], 'Vigília Pascal na Noite Santa')
-        self.assertEqual(len(result['readings']['psalms']), 1)
-        self.assertEqual(result['readings']['psalms'][0]['ref'], 'Sl 1')
-        self.assertEqual(result['readings']['psalms'][0]['title'], 'Salmo - Sl 1')
-        self.assertEqual(result['readings']['psalms'][0]['response'], 'Resposta do salmo.')
-        self.assertEqual(result['readings']['psalms'][0]['content_psalm'], ['Versículo do salmo.'])
-        self.assertEqual(len(result['readings']['other_readings']), 2)
-        self.assertEqual(result['readings']['sections'][-1]['type'], 'gospel')
+        self.assertEqual(len(readings_of(result, 'psalm')), 1)
+        self.assertEqual(readings_of(result, 'psalm')[0]['ref'], 'Sl 1')
+        self.assertEqual(readings_of(result, 'psalm')[0]['title'], 'Salmo - Sl 1')
+        self.assertEqual(readings_of(result, 'psalm')[0]['response'], 'Resposta do salmo.')
+        self.assertEqual(readings_of(result, 'psalm')[0]['content_psalm'], ['Versículo do salmo.'])
+        self.assertEqual(len(readings_of(result, 'other_reading')), 2)
+        self.assertEqual(readings_for(result)[-1]['type'], 'gospel')
 
     def test_interleaves_vigil_psalms_after_each_reading(self):
         body = (
@@ -275,15 +308,15 @@ class CnbbFormattingTests(unittest.TestCase):
         ]
 
         self.assertEqual(
-            [section['type'] for section in result['readings']['sections']],
+            [reading['type'] for reading in readings_for(result)],
             expected_types,
         )
         self.assertEqual(
-            [section['type'] for section in result['celebrations'][0]['sections']],
+            [reading['type'] for reading in result['celebrations'][0]['readings']],
             expected_types,
         )
         self.assertEqual(
-            [section['ref'] for section in result['readings']['psalms']],
+            [reading['ref'] for reading in readings_of(result, 'psalm')],
             expected_psalm_refs,
         )
 
@@ -313,7 +346,7 @@ class CnbbFormattingTests(unittest.TestCase):
             make_content('2026-11-26', body, leituras=leituras)
         )
 
-        first = result['readings']['first_readings'][0]
+        first = readings_of(result, 'first_reading')[0]
         self.assertEqual(first['pre'], 'Caiu Babilônia, a grande!')
         self.assertEqual(first['ref'], 'Ap 18,1-2.21-23.19,1-3.9a')
         self.assertEqual(
@@ -323,10 +356,10 @@ class CnbbFormattingTests(unittest.TestCase):
         self.assertEqual(first['text'], 'Texto da primeira leitura.')
         self.assertEqual(first['footer'], 'Palavra do Senhor.')
 
-        psalm = result['readings']['psalms'][0]
+        psalm = readings_of(result, 'psalm')[0]
         self.assertEqual(psalm['ref'], 'Sl 99(100),2.3.4.5 (R. Ap 19,9a)')
 
-        second = result['readings']['second_readings'][0]
+        second = readings_of(result, 'second_reading')[0]
         self.assertEqual(second['ref'], 'Rm 8,1-5')
         self.assertEqual(second['footer'], 'Palavra do Senhor.')
         self.assertEqual(second['footer_response'], 'Graças a Deus.')
@@ -363,7 +396,7 @@ class CnbbFormattingTests(unittest.TestCase):
             make_content('2026-11-26', body, leituras=leituras)
         )
 
-        first = result['readings']['first_readings'][0]
+        first = readings_of(result, 'first_reading')[0]
         self.assertEqual(
             first['text_array'],
             [
@@ -380,7 +413,7 @@ class CnbbFormattingTests(unittest.TestCase):
             ],
         )
 
-        gospel = result['readings']['gospels'][0]
+        gospel = readings_of(result, 'gospel')[0]
         self.assertEqual(
             gospel['text_array'],
             [
@@ -403,7 +436,7 @@ class CnbbFormattingTests(unittest.TestCase):
         result = ExtractorService._formatLiturgiaCNBB(make_content('2027-03-27', body))
 
         self.assertEqual(
-            result['readings']['gospels'][0]['text_array'],
+            readings_of(result, 'gospel')[0]['text_array'],
             [{'verse': '', 'text': 'Texto sem marcação de versículos.'}],
         )
 
@@ -418,7 +451,7 @@ class CnbbFormattingTests(unittest.TestCase):
         )
 
         result = ExtractorService._formatLiturgiaCNBB(make_content('2026-11-26', body))
-        first_reading = result['readings']['first_readings'][0]
+        first_reading = readings_of(result, 'first_reading')[0]
 
         self.assertEqual(first_reading['footer'], 'Palavra do Senhor.')
         self.assertEqual(
@@ -427,12 +460,46 @@ class CnbbFormattingTests(unittest.TestCase):
         )
 
     def test_cnbb_route_uses_short_source_label(self):
-        with patch('app.ExtractorService.getLiturgiaCNBB', return_value={'title': 'Liturgia'}):
+        liturgy = {
+            'date': '2026-11-26',
+            'celebrations': [{
+                'title': 'Liturgia',
+                'readings': [{
+                    'title': 'EVANGELHO',
+                    'type': 'gospel',
+                    'head_response': 'Aleluia.',
+                    'head': 'Levantai vossa cabeça...',
+                    'start': 'Proclamação do Evangelho...',
+                    'pre': 'Preparação da leitura.',
+                    'ref': 'Lc 21,20-28',
+                    'text_array': [],
+                    'text': 'Naquele tempo.',
+                    'footer': 'Palavra da Salvação.',
+                }],
+            }],
+            'details': 'Detalhes',
+            'leituras': 'Leituras',
+            'html_full': '<p>HTML</p>',
+        }
+        with patch('app.ExtractorService.getLiturgiaCNBB', return_value=liturgy):
             response = flask_app.test_client().get('/cnbb?date=2026-11-26')
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers['Access-Control-Allow-Origin'], '*')
-        self.assertEqual(response.get_json()['source'], 'CNBB')
+        payload = response.get_json()
+        self.assertEqual(payload['source'], 'CNBB')
+        self.assertNotIn('today', payload)
+        self.assertEqual(
+            list(payload),
+            ['objective', 'source', 'date', 'celebrations', 'details', 'leituras', 'html_full'],
+        )
+        self.assertEqual(
+            list(payload['celebrations'][0]['readings'][0]),
+            [
+                'title', 'type', 'head_response', 'head', 'start', 'pre',
+                'ref', 'text_array', 'text', 'footer',
+            ],
+        )
 
     def test_invalid_date_is_rejected_as_bad_request(self):
         response = flask_app.test_client().get('/cnbb?date=2026-02-30')
@@ -469,7 +536,8 @@ class CnbbFormattingTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['source'], 'CNBB')
-        self.assertEqual(response.get_json()['today'], {'title': 'CNBB'})
+        self.assertEqual(response.get_json()['title'], 'CNBB')
+        self.assertNotIn('today', response.get_json())
         cnbb.assert_called_once_with('2026-12-25')
         sagrada.assert_not_called()
         cancao_nova.assert_not_called()

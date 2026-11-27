@@ -7,6 +7,9 @@ from extractor.ExtractorService import ExtractorService
 
 
 app = Flask(__name__)
+app.config['JSON_SORT_KEYS'] = False
+
+OBJECTIVE = 'A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a criação de aplicações que almejam a evangelização.'
 
 
 @app.before_request
@@ -58,11 +61,18 @@ def homepage():
             liturgy = ExtractorService.getScrapyCancaoNova()
             source = 'Canção Nova'
 
-    response = {
-        'objective': 'A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a criação de aplicações que almejam a evangelização.',
-        'source': source,
-        'today': liturgy
-    }
+    if source == 'CNBB':
+        response = {
+            'objective': OBJECTIVE,
+            'source': source,
+            **liturgy,
+        }
+    else:
+        response = {
+            'objective': OBJECTIVE,
+            'source': source,
+            'today': liturgy,
+        }
 
     return jsonify(response)
 
@@ -71,7 +81,7 @@ def cancaoNova():
     liturgy = ExtractorService.getScrapyCancaoNova()
 
     response = {
-        'objective': 'A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a criação de aplicações que almejam a evangelização.',
+        'objective': OBJECTIVE,
         'source':'Canção Nova',
         'today': liturgy
     }
@@ -83,9 +93,9 @@ def cnbb():
     liturgy = ExtractorService.getLiturgiaCNBB(request.args.get('date'))
 
     response = {
-        'objective': 'A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a criação de aplicações que almejam a evangelização.',
+        'objective': OBJECTIVE,
         'source': 'CNBB',
-        'today': liturgy
+        **liturgy,
     }
 
     return jsonify(response)
@@ -95,7 +105,7 @@ def santo():
     santo = ExtractorService.getScrapySantoCancaoNova()
 
     response = {
-        'objective': 'A API_LITURGIA_DIARIA visa disponibilizar via api as leituras para facilitar a criação de aplicações que almejam a evangelização.',
+        'objective': OBJECTIVE,
         'source':'Canção Nova',
         'today': santo
     }

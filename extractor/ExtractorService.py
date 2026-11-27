@@ -45,8 +45,7 @@ class ExtractorService():
 
     @staticmethod
     def _formatLiturgiaCNBB(content):
-        data = dict(content)
-        data.pop('filename', None)
+        data = {'date': content['date']}
         date = datetime.date.fromisoformat(content['date'])
         month_abbreviations = (
             'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
@@ -58,6 +57,8 @@ class ExtractorService():
             'month': month_abbreviations[date.month - 1],
             'year': date.strftime('%Y'),
         }
+        data['title'] = content.get('title')
+        data['color'] = content.get('color')
 
         def normalize(value):
             decomposed = unicodedata.normalize('NFKD', value)
@@ -671,34 +672,56 @@ class ExtractorService():
                 section.pop('_verse_entries', None)
                 section.pop('_before_first_verse', None)
 
-        readings = {
-            'first_readings': [],
-            'psalms': [],
-            'second_readings': [],
-            'other_readings': [],
-            'gospels': [],
-            'sections': sections,
+        reading_field_order = {
+            'first_reading': (
+                'title', 'type', 'start', 'pre', 'ref', 'text_array', 'text',
+                'footer', 'footer_response',
+            ),
+            'second_reading': (
+                'title', 'type', 'start', 'pre', 'ref', 'text_array', 'text',
+                'footer', 'footer_response',
+            ),
+            'other_reading': (
+                'title', 'type', 'start', 'pre', 'ref', 'text_array', 'text',
+                'footer', 'footer_response',
+            ),
+            'psalm': ('title', 'type', 'ref', 'response', 'content_psalm'),
+            'gospel': (
+                'title', 'type', 'head_response', 'head', 'start', 'pre',
+                'ref', 'text_array', 'text', 'footer', 'footer_response',
+            ),
         }
-        category_by_type = {
-            'first_reading': 'first_readings',
-            'psalm': 'psalms',
-            'second_reading': 'second_readings',
-            'other_reading': 'other_readings',
-            'gospel': 'gospels',
-        }
+
+        def ordered_reading(section):
+            field_order = reading_field_order[section['type']]
+            return {
+                field: section[field]
+                for field in field_order
+                if field in section
+            }
+
         celebrations = {}
         for section in sections:
             if section['type'] == 'acclamation':
                 continue
-            readings[category_by_type[section['type']]].append(section)
             celebration = section['celebration']
-            celebrations.setdefault(celebration, []).append(section)
+            celebrations.setdefault(celebration, []).append(ordered_reading(section))
 
-        data['readings'] = readings
         data['celebrations'] = [
-            {'title': title, 'sections': celebration_sections}
-            for title, celebration_sections in celebrations.items()
+            {'title': title, 'readings': celebration_readings}
+            for title, celebration_readings in celebrations.items()
         ]
+        normalized_source_fields = {
+            'date', 'title', 'color', 'details', 'leituras', 'body', 'filename',
+        }
+        data.update({
+            key: value
+            for key, value in content.items()
+            if key not in normalized_source_fields and key not in data
+        })
+        data['details'] = content.get('details')
+        data['leituras'] = content.get('leituras')
+        data['html_full'] = content.get('body', '')
         return data
 
     @staticmethod
